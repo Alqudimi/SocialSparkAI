@@ -13,7 +13,7 @@ router = APIRouter(prefix="/content", tags=["content generation"])
 def initialize_gemini():
     if settings.gemini_api_key:
         genai.configure(api_key=settings.gemini_api_key)
-        return genai.GenerativeModel('gemini-pro')
+        return genai.GenerativeModel('gemini-2.5-flash')
     return None
 
 @router.post("/generate", response_model=GenerateContentResponse)
