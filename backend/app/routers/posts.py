@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Dict
 from datetime import datetime
 from ..database import get_db
-from ..models import User, Post
+from ..models import User, Post, SocialAccount
 from ..schemas import PostCreate, PostUpdate, PostResponse
 from ..auth import get_current_active_user
+from ..social_media_integrations import SocialMediaPublisher
 
 router = APIRouter(prefix="/posts", tags=["posts"])
 
@@ -116,9 +117,48 @@ async def publish_post(
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
     
-    post.is_published = True
-    post.status = "published"
-    db.commit()
-    db.refresh(post)
+    # Fetch user's social account tokens
+    social_accounts = db.query(SocialAccount).filter(
+        SocialAccount.user_id == current_user.id,
+        SocialAccount.is_connected == True
+    ).all()
     
-    return {"message": "Post published successfully", "post": post}
+    # Build tokens dictionary from social accounts
+    user_tokens: Dict[str, str] = {}
+    for account in social_accounts:
+        platform_lower = account.platform.lower()
+        if account.access_token:
+            if platform_lower in ['threads']:
+                user_tokens['threads'] = account.access_token
+            elif platform_lower in ['instagram']:
+                user_tokens['instagram'] = account.access_token
+    
+    # Initialize the social media publisher
+    publisher = SocialMediaPublisher()
+    
+    # Publish to the selected platforms
+    publishing_results = publisher.publish_to_platforms(
+        content=post.content,
+        platforms=post.platforms or [],
+        user_tokens=user_tokens if user_tokens else None,
+        image_url=None  # TODO: Add image support if needed
+    )
+    
+    # Check if at least one platform succeeded
+    any_success = any(result.get("success", False) for result in publishing_results)
+    
+    if any_success:
+        post.is_published = True
+        post.status = "published"
+        db.commit()
+        db.refresh(post)
+    else:
+        post.status = "failed"
+        db.commit()
+        db.refresh(post)
+    
+    return {
+        "message": "Publishing complete" if any_success else "Publishing failed",
+        "post": post,
+        "publishing_results": publishing_results
+    }
